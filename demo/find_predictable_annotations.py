@@ -148,6 +148,15 @@ def main(opt):
         pickle.dump(new_anns, file)
 
 if __name__ == '__main__':
+    """
+    Example:
+    
+    $ python find_predictable_annotations.py \
+    -type train \
+    -year 2014 \
+    -gpu 1
+    
+    """
     parser = argparse.ArgumentParser(
         description='find_predictable_annotations.py',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
