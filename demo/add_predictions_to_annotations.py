@@ -75,8 +75,8 @@ def load_coco_dataset(opt):
     coco = COCO(os.path.join(opt.root_dir, f'annotations_trainval{opt.year}/annotations/instances_{opt.type}{opt.year}.json'))
     return coco
 
-def get_predictable_annotation_ids(opt, anns, predictions):
-    """ 
+def get_prediction_annotation_ids(opt, anns, predictions):
+    """ Align predictions to their corresponding annotations of an image.
     Args: 
         - `anns`: COCO annotation of an image.
         - `predictions`: Predictions of an image from the pretrained model.
@@ -85,7 +85,7 @@ def get_predictable_annotation_ids(opt, anns, predictions):
     d = predictions.bbox.cpu().numpy().copy() # detected bboxes (xyxy)
     
     if not len(g) or not len(d):
-        return []
+        return [], []
     
     d[:,[2,3]] -= d[:,[0,1]] # convert to (xywh)
     iscrowd = [int(g['iscrowd']) for g in anns]
@@ -93,10 +93,10 @@ def get_predictable_annotation_ids(opt, anns, predictions):
     # Compute IOUs.
     ious = maskUtils.iou(d, g, iscrowd) # shape: (#d, #g)
 
-    # Find predictable ground-truth bbox ids.
-    predictable_ann_ids = ious.argmax(axis=-1)[ious.max(axis=-1) >= opt.iou_threshold]
-    
-    return predictable_ann_ids
+    # Find predictable ground-truth bbox ids.    
+    keeps = ious.max(axis=-1) >= opt.iou_threshold
+    prediction_ann_ids = ious.argmax(axis=-1)
+    return keeps, prediction_ann_ids
 
 def main(opt):
 
@@ -107,6 +107,9 @@ def main(opt):
     coco = load_coco_dataset(opt)
     img_ids = coco.getImgIds()
     imgs = coco.loadImgs(img_ids) # dict objects
+    
+    # Make coco_orig_id2name lookup table
+    coco_orig_name2id = {v['name']: v['id'] for v in coco.cats.values()}
     
     new_anns = {}
     
@@ -123,13 +126,29 @@ def main(opt):
             
             # Predict.
             result, predictions = model.run_on_opencv_image(image, return_predictions=True)
-
-            # Find predictable ground-truth bbox ids.
-            predictable_ann_ids = get_predictable_annotation_ids(opt, anns, predictions)
             
-            # Label it.
-            for ann_id in range(len(anns)):
-                anns[ann_id]['predictable'] = ann_id in predictable_ann_ids
+            # Combine 'label', 'score', 'mask' to a single prediction object.
+            formated_predictions = [{
+                'category_id': coco_orig_name2id[model.CATEGORIES[cid]], # map coco_demo's id to original coco ids.
+                'category_name': model.CATEGORIES[cid],
+                'score': score,
+                'mask': mask,
+                'xyxy_bbox': bbox
+            } for cid, score, mask, bbox in zip(
+                predictions.get_field('labels').cpu().tolist(),
+                predictions.get_field('scores').cpu().tolist(),
+                predictions.get_field('mask').cpu().numpy(),
+                predictions.bbox.cpu().tolist()
+            )]
+
+            # Get aligned prediction ids to their annotation ids.
+            keeps, prediction_ann_ids = get_prediction_annotation_ids(opt, anns, predictions)
+            
+            # Save predictions to its corresponding annotations.
+            for prediction_id, keep in enumerate(keeps):
+                if keep:
+                    ann_id = prediction_ann_ids[prediction_id]
+                    anns[ann_id]['prediction'] = formated_predictions[prediction_id]
                 
             # Save labeled annotation.
             new_anns[img['id']] = anns
@@ -156,6 +175,15 @@ if __name__ == '__main__':
     -year 2014 \
     -gpu 1
     
+    
+    Output (`new_anns`):
+    
+    {
+        <img_id>: [annotation_1, ..., annotation_N],
+    }
+    
+    Every annotation_<i> may has a key "prediction", which aligns to the pretrained model's prediction.
+
     """
     parser = argparse.ArgumentParser(
         description='find_predictable_annotations.py',
