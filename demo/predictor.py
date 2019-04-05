@@ -159,7 +159,7 @@ class COCODemo(object):
         )
         return transform
 
-    def run_on_opencv_image(self, image):
+    def run_on_opencv_image(self, image, return_predictions=False):
         """
         Arguments:
             image (np.ndarray): an image as returned by OpenCV
@@ -182,8 +182,11 @@ class COCODemo(object):
             result = self.overlay_keypoints(result, top_predictions)
         result = self.overlay_class_names(result, top_predictions)
 
-        return result
-
+        if return_predictions:
+            return result, top_predictions
+        else:
+            return result
+    
     def compute_prediction(self, original_image):
         """
         Arguments:
