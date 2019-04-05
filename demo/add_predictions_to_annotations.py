@@ -170,7 +170,7 @@ if __name__ == '__main__':
     """
     Example:
     
-    $ python find_predictable_annotations.py \
+    $ python add_predictions_to_annotations.py \
     -type train \
     -year 2014 \
     -gpu 1
