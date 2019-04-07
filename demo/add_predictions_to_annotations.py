@@ -85,18 +85,19 @@ def get_prediction_annotation_ids(opt, anns, predictions):
     d = predictions.bbox.cpu().numpy().copy() # detected bboxes (xyxy)
     
     if not len(g) or not len(d):
-        return [], []
+        return [], [], []
     
     d[:,[2,3]] -= d[:,[0,1]] # convert to (xywh)
     iscrowd = [int(g['iscrowd']) for g in anns]
     
     # Compute IOUs.
-    ious = maskUtils.iou(d, g, iscrowd) # shape: (#d, #g)
+    ious_mat = maskUtils.iou(d, g, iscrowd) # shape: (#d, #g)
 
     # Find predictable ground-truth bbox ids.    
-    keeps = ious.max(axis=-1) >= opt.iou_threshold
-    prediction_ann_ids = ious.argmax(axis=-1)
-    return keeps, prediction_ann_ids
+    ious = ious_mat.max(axis=-1)
+    keeps = ious >= opt.iou_threshold
+    prediction_ann_ids = ious_mat.argmax(axis=-1)
+    return keeps, ious, prediction_ann_ids
 
 def main(opt):
 
@@ -111,7 +112,7 @@ def main(opt):
     # Make coco_orig_id2name lookup table
     coco_orig_name2id = {v['name']: v['id'] for v in coco.cats.values()}
     
-    new_anns = {}
+    results = {}
     
     for img in tqdm(imgs):
         
@@ -132,26 +133,28 @@ def main(opt):
                 'category_id': coco_orig_name2id[model.CATEGORIES[cid]], # map coco_demo's id to original coco ids.
                 'category_name': model.CATEGORIES[cid],
                 'score': score,
-                'mask': mask,
-                'xyxy_bbox': bbox
-            } for cid, score, mask, bbox in zip(
+                #'mask': mask,
+                #'xyxy_bbox': bbox
+            } for cid, score in zip(
                 predictions.get_field('labels').cpu().tolist(),
                 predictions.get_field('scores').cpu().tolist(),
-                predictions.get_field('mask').cpu().numpy(),
-                predictions.bbox.cpu().tolist()
+                #predictions.get_field('mask').cpu().numpy(),
+                #predictions.bbox.cpu().tolist()
             )]
 
             # Get aligned prediction ids to their annotation ids.
-            keeps, prediction_ann_ids = get_prediction_annotation_ids(opt, anns, predictions)
+            keeps, ious, prediction_ann_ids = get_prediction_annotation_ids(opt, anns, predictions)
             
             # Save predictions to its corresponding annotations.
+            aligned_predictions = {} # key: annotation id; value: prediction
             for prediction_id, keep in enumerate(keeps):
                 if keep:
                     ann_id = prediction_ann_ids[prediction_id]
-                    anns[ann_id]['prediction'] = formated_predictions[prediction_id]
+                    formated_predictions[prediction_id]['iou'] = ious[prediction_id]
+                    aligned_predictions[ann_id] = formated_predictions[prediction_id]
                 
             # Save labeled annotation.
-            new_anns[img['id']] = anns
+            results[img['id']] = aligned_predictions
     
         except Exception as e:
             print(f"Image ID: {img['id']} occurs error.")
@@ -164,7 +167,7 @@ def main(opt):
     model_name = os.path.basename(opt.cfg_file).split('.yaml')[0]
     print(f'Saving new annotations predict by "{model_name}"...')
     with open(f'coco_{opt.type}{opt.year}_{model_name}.pkl', 'wb') as file:
-        pickle.dump(new_anns, file)
+        pickle.dump(results, file)
 
 if __name__ == '__main__':
     """
